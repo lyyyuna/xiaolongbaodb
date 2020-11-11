@@ -3,17 +3,28 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
 )
 
-// type OFFTYPE int64
+var order = 4
+
+const (
+	INVALID_OFFSET = 0xdeadbeef
+	MAX_FREEBLOCKS = 100
+)
+
+var ErrorHasExistedKey = errors.New("hasExistedKey")
+var ErrorNotFoundKey = errors.New("notFoundKey")
+var ErrorInvalidDBFormat = errors.New("invalid db format")
 
 type Tree struct {
 	file      *os.File
 	blockSize uint32
 	fileSize  int64
+	rootOff   int64
 }
 
 // Node defines the node structure
@@ -56,7 +67,9 @@ func NewTree(filename string) (*Tree, error) {
 
 	// already has file content
 	if t.fileSize != 0 {
-
+		if err = t.reconstructRootNode(); err != nil {
+			return nil, err
+		}
 	}
 
 	return t, nil
@@ -64,11 +77,40 @@ func NewTree(filename string) (*Tree, error) {
 
 func (t *Tree) reconstructRootNode() error {
 
+	var node *Node
+	var err error
+	// find first valid node
+	for off := int64(0); off < t.fileSize; off += int64(t.blockSize) {
+		if node, err = t.seekNode(off); err != nil {
+			return err
+		}
+		if node.IsActive {
+			break
+		}
+	}
+	if !node.IsActive {
+		return ErrorInvalidDBFormat
+	}
+	// the root node's parent is invalid
+	for node.Parent != INVALID_OFFSET {
+		if node, err = t.seekNode(node.Parent); err != nil {
+			return err
+		}
+	}
+
+	t.rootOff = node.Self
+
 	return nil
 }
 
 func (t *Tree) seekNode(off int64) (*Node, error) {
-	node := &Node{}
+	node := &Node{
+		IsActive: false,
+		Self:     INVALID_OFFSET,
+		Next:     INVALID_OFFSET,
+		Prev:     INVALID_OFFSET,
+		Parent:   INVALID_OFFSET,
+	}
 
 	buf := make([]byte, 8)
 	if n, err := t.file.ReadAt(buf, off); err != nil {
