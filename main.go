@@ -21,10 +21,11 @@ var ErrorNotFoundKey = errors.New("notFoundKey")
 var ErrorInvalidDBFormat = errors.New("invalid db format")
 
 type Tree struct {
-	file      *os.File
-	blockSize uint32
-	fileSize  int64
-	rootOff   int64
+	file       *os.File
+	blockSize  uint32
+	fileSize   int64
+	rootOff    int64
+	freeBlocks []int64
 }
 
 // Node defines the node structure
@@ -70,6 +71,10 @@ func NewTree(filename string) (*Tree, error) {
 		if err = t.reconstructRootNode(); err != nil {
 			return nil, err
 		}
+
+		if err = t.allocNewFreeNodeInDisk(); err != nil {
+			return nil, err
+		}
 	}
 
 	return t, nil
@@ -99,6 +104,29 @@ func (t *Tree) reconstructRootNode() error {
 	}
 
 	t.rootOff = node.Self
+
+	return nil
+}
+
+func (t *Tree) allocNewFreeNodeInDisk() error {
+
+	for off := int64(0); off < t.fileSize; off += BLOCK_SIZE {
+		node, err := t.seekNode(off)
+		if err != nil {
+			return err
+		}
+		// is inactive == freeblock
+		if !node.IsActive {
+			t.freeBlocks = append(t.freeBlocks, off)
+		}
+	}
+
+	next_file := ((t.fileSize + 4095) / 4096) * 4096
+	for len(t.freeBlocks) < MAX_FREEBLOCKS {
+		t.freeBlocks = append(t.freeBlocks, next_file)
+		next_file += BLOCK_SIZE
+	}
+	t.fileSize = next_file
 
 	return nil
 }
@@ -215,6 +243,122 @@ func (t *Tree) seekNode(off int64) (*Node, error) {
 	}
 
 	return node, nil
+}
+
+func (t *Tree) Insert(key int, val string) error {
+	// if tree is empty
+	if t.rootOff == INVALID_OFFSET {
+		node, err := t.newNodeFromDisk()
+		if err != nil {
+			return err
+		}
+		t.rootOff = node.Self
+		node.Keys = append(node.Keys, key)
+		node.Values = append(node.Values, val)
+		node.IsLeaf = true
+		return t.flushNodeToDisk(node)
+	}
+}
+
+func (t *Tree) newNodeFromDisk() (*Node, error) {
+
+	if len(t.freeBlocks) == 0 {
+		if err := t.allocNewFreeNodeInDisk(); err != nil {
+			return nil, err
+		}
+	}
+	newDiskOff := t.freeBlocks[0]
+	t.freeBlocks = t.freeBlocks[1:len(t.freeBlocks)]
+	node := &Node{
+		IsActive: true,
+		Self:     newDiskOff,
+		Prev:     INVALID_OFFSET,
+		Next:     INVALID_OFFSET,
+		Parent:   INVALID_OFFSET,
+	}
+
+	return node, nil
+}
+
+func (t *Tree) flushNodeToDisk(n *Node) error {
+
+	if n == nil {
+		panic("nil node to disk")
+	}
+
+	if t.file == nil {
+		panic("file not specified, tree not initialized?")
+	}
+
+	bs := bytes.NewBuffer(make([]byte, 0))
+
+	// isactive
+	if err := binary.Write(bs, binary.LittleEndian, n.IsActive); err != nil {
+		return err
+	}
+
+	// isleaf
+	if err := binary.Write(bs, binary.LittleEndian, n.IsLeaf); err != nil {
+		return err
+	}
+
+	// self
+	if err := binary.Write(bs, binary.LittleEndian, n.Self); err != nil {
+		return err
+	}
+
+	// next
+	if err := binary.Write(bs, binary.LittleEndian, n.Next); err != nil {
+		return err
+	}
+
+	// prev
+	if err := binary.Write(bs, binary.LittleEndian, n.Prev); err != nil {
+		return err
+	}
+
+	// parent
+	if err := binary.Write(bs, binary.LittleEndian, n.Parent); err != nil {
+		return err
+	}
+
+	// children
+	childCnt := len(n.Children)
+	if err := binary.Write(bs, binary.LittleEndian, childCnt); err != nil {
+		return err
+	}
+
+	for _, v := range n.Children {
+		if err := binary.Write(bs, binary.LittleEndian, v); err != nil {
+			return err
+		}
+	}
+
+	// keys
+	keysCnt := len(n.Keys)
+	if err := binary.Write(bs, binary.LittleEndian, keysCnt); err != nil {
+		return err
+	}
+
+	for _, v := range n.Keys {
+		if err := binary.Write(bs, binary.LittleEndian, v); err != nil {
+			return err
+		}
+	}
+
+	// values
+	valuesCnt := len(n.Values)
+	if err := binary.Write(bs, binary.LittleEndian, valuesCnt); err != nil {
+		return err
+	}
+
+	for _, v := range n.Values {
+		if err := binary.Write(bs, binary.LittleEndian, v); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func main() {
