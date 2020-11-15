@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"syscall"
 )
 
 var order = 4
@@ -14,6 +13,7 @@ var order = 4
 const (
 	INVALID_OFFSET = 0xdeadbeef
 	MAX_FREEBLOCKS = 100
+	BLOCK_SIZE     = 4096 // it should call syscall to find the filesystem block size, but i dont know which syscall on windows
 )
 
 var ErrorHasExistedKey = errors.New("hasExistedKey")
@@ -51,12 +51,12 @@ func NewTree(filename string) (*Tree, error) {
 	}
 	t.file = file
 
-	var stat syscall.Statfs_t
-	if err = syscall.Statfs(filename, &stat); err != nil {
-		return nil, err
-	}
+	// var stat syscall.Statfs_t
+	// if err = syscall.Statfs(filename, &stat); err != nil {
+	// 	return nil, err
+	// }
 
-	t.blockSize = stat.Bsize
+	t.blockSize = BLOCK_SIZE
 
 	fstat, err := t.file.Stat()
 	if err != nil {
