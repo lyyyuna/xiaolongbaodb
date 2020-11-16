@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 )
 
 var order = 4
@@ -246,7 +247,7 @@ func (t *Tree) seekNode(off int64) (*Node, error) {
 }
 
 func (t *Tree) Insert(key int, val string) error {
-	// if tree is empty
+	// if tree is empty, insert it as root
 	if t.rootOff == INVALID_OFFSET {
 		node, err := t.newNodeFromDisk()
 		if err != nil {
@@ -258,6 +259,9 @@ func (t *Tree) Insert(key int, val string) error {
 		node.IsLeaf = true
 		return t.flushNodeToDisk(node)
 	}
+
+	// otherwise, insert it as leaf
+	return t.insertIntoLeaf(key, val)
 }
 
 func (t *Tree) newNodeFromDisk() (*Node, error) {
@@ -359,6 +363,37 @@ func (t *Tree) flushNodeToDisk(n *Node) error {
 	}
 
 	return nil
+}
+
+func (t *Tree) insertIntoLeaf(key int, val string) error {
+	return nil
+}
+
+func (t *Tree) findLeaf(key int) (*Node, error) {
+	root, err := t.seekNode(t.rootOff)
+	if err != nil {
+		return nil, err
+	}
+
+	var nodeIterator *Node
+	nodeIterator = root
+	for !nodeIterator.IsLeaf {
+		idx := sort.Search(len(nodeIterator.Keys), func(i int) bool {
+			return key <= nodeIterator.Keys[i]
+		})
+
+		if idx == len(nodeIterator.Keys) {
+			idx = len(nodeIterator.Keys) - 1
+		}
+
+		var err error
+		nodeIterator, err = t.seekNode(nodeIterator.Children[idx])
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return nodeIterator, nil
 }
 
 func main() {
