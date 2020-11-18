@@ -366,10 +366,21 @@ func (t *Tree) flushNodeToDisk(n *Node) error {
 }
 
 func (t *Tree) insertIntoLeaf(key int, val string) error {
-	return nil
+	leaf, err := t.findLeafNode(key)
+	if err != nil {
+		return err
+	}
+
+	idx, err := leaf.insertKeyValIntoLeaf(key, val)
+	if err != nil {
+		return err
+	}
+
+	// 这里父节点存储的是每个子节点最后一个 key
+	// 所以有可能需要更新父节点
 }
 
-func (t *Tree) findLeaf(key int) (*Node, error) {
+func (t *Tree) findLeafNode(key int) (*Node, error) {
 	root, err := t.seekNode(t.rootOff)
 	if err != nil {
 		return nil, err
@@ -394,6 +405,60 @@ func (t *Tree) findLeaf(key int) (*Node, error) {
 	}
 
 	return nodeIterator, nil
+}
+
+func (n *Node) insertKeyValIntoLeaf(key int, val string) (int, error) {
+	idx := sort.Search(len(n.Keys), func(i int) bool {
+		return key <= n.Keys[i]
+	})
+
+	if idx < len(n.Keys) && n.Keys[idx] == key {
+		return 0, ErrorHasExistedKey
+	}
+
+	n.Keys = append(n.Keys, key)
+	n.Values = append(n.Values, val)
+
+	for i := len(n.Keys) - 1; i > idx; i-- {
+		n.Keys[i] = n.Keys[i-1]
+		n.Values[i] = n.Values[i-1]
+	}
+
+	// insert into node's keys
+	n.Keys[idx] = key
+	n.Values[idx] = val
+
+	return idx, nil
+}
+
+// 父节点存储字节点最后一个 key
+func (leaf *Node) mayUpdateParentKeys(t *Tree, idx int) error {
+	if idx == len(leaf.Keys)-1 && leaf.Parent != INVALID_OFFSET {
+		key := leaf.Keys[len(leaf.Keys)-1]
+		updateNodeOff := leaf.Parent
+
+		var nodeParentIterator, nodePrevIterator *Node
+		var err error
+		nodeParentIterator = nil
+		nodePrevIterator = leaf
+		for updateNodeOff != INVALID_OFFSET && idx == len(nodePrevIterator.Keys)-1 {
+			nodeParentIterator, err = t.seekNode(updateNodeOff)
+			if err != nil {
+				return err
+			}
+
+			for k, v := range nodeParentIterator.Children {
+				if v == nodePrevIterator.Self {
+					idx = k
+					break
+				}
+			}
+
+			nodeParentIterator.Keys[idx] = key
+
+			t.flushNodeToDisk(nodeParentIterator)
+		}
+	}
 }
 
 func main() {
