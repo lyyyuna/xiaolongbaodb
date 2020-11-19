@@ -398,6 +398,50 @@ func (t *Tree) insertIntoLeaf(key int, val string) error {
 		return err
 	}
 
+	return t.insertIntoParent(leaf)
+}
+
+func (t *Tree) insertIntoParent(leaf *Node) error {
+	parentOff := leaf.Parent
+	leftOff := leaf.Self
+	rightOff := leaf.Next
+
+	// root?
+	if parentOff == INVALID_OFFSET {
+		left, err := t.seekNode(leftOff)
+		if err != nil {
+			return err
+		}
+
+		right, err := t.seekNode(rightOff)
+		if err != nil {
+			return err
+		}
+
+		if err := t.newRootNode(left, right); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Tree) newRootNode(left, right *Node) error {
+	root, err := t.newNodeFromDisk()
+	if err != nil {
+		return err
+	}
+
+	root.Keys = append(root.Keys, left.Keys[len(left.Keys)-1])
+	root.Keys = append(root.Keys, right.Keys[len(right.Keys)-1])
+	root.Children = append(root.Children, left.Self)
+	root.Children = append(root.Children, right.Self)
+
+	left.Parent = root.Self
+	right.Parent = root.Self
+
+	t.rootOff = root.Self
+
+	return t.flushNodeToDisk(root)
 }
 
 func cut(length int) int {
