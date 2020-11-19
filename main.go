@@ -378,6 +378,75 @@ func (t *Tree) insertIntoLeaf(key int, val string) error {
 
 	// 这里父节点存储的是每个子节点最后一个 key
 	// 所以有可能需要更新父节点
+	if err := leaf.mayUpdateParentKeys(t, idx); err != nil {
+		return err
+	}
+
+	// lead no needs to split
+	if len(leaf.Keys) <= order {
+		return t.flushNodeToDisk(leaf)
+	}
+
+	// split the leaf
+	newLeaf, err := t.newNodeFromDisk()
+	if err != nil {
+		return err
+	}
+
+	newLeaf.IsLeaf = true
+	if err := t.splitLeafIntoTwoLeaves(leaf, newLeaf); err != nil {
+		return err
+	}
+
+}
+
+func cut(length int) int {
+	return (length + 1) / 2
+}
+
+func (t *Tree) splitLeafIntoTwoLeaves(leaf *Node, newLeaf *Node) error {
+	split := cut(order)
+
+	// copy half to newleaf
+	for i := split; i <= order; i++ {
+		newLeaf.Keys = append(newLeaf.Keys, leaf.Keys[i])
+		newLeaf.Values = append(newLeaf.Values, leaf.Values[i])
+	}
+
+	// leave half in original leaf
+	leaf.Keys = leaf.Keys[:split]
+	leaf.Values = leaf.Values[:split]
+
+	// adjust relation
+	newLeaf.Next = leaf.Next
+	leaf.Next = newLeaf.Self
+	newLeaf.Prev = leaf.Self
+
+	// adjust parent
+	newLeaf.Parent = leaf.Parent
+
+	// flush to disk
+	if err := t.flushNodeToDisk(leaf); err != nil {
+		return err
+	}
+
+	if err := t.flushNodeToDisk(newLeaf); err != nil {
+		return err
+	}
+
+	// adjust original next
+	if newLeaf.Next != INVALID_OFFSET {
+		nextNode, err := t.seekNode(newLeaf.Next)
+		if err != nil {
+			return err
+		}
+		nextNode.Prev = newLeaf.Self
+
+		if err := t.flushNodeToDisk(nextNode); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (t *Tree) findLeafNode(key int) (*Node, error) {
@@ -437,18 +506,18 @@ func (leaf *Node) mayUpdateParentKeys(t *Tree, idx int) error {
 		key := leaf.Keys[len(leaf.Keys)-1]
 		updateNodeOff := leaf.Parent
 
-		var nodeParentIterator, nodePrevIterator *Node
+		var nodeParentIterator, nodeCurIterator *Node
 		var err error
 		nodeParentIterator = nil
-		nodePrevIterator = leaf
-		for updateNodeOff != INVALID_OFFSET && idx == len(nodePrevIterator.Keys)-1 {
+		nodeCurIterator = leaf
+		for updateNodeOff != INVALID_OFFSET && idx == len(nodeCurIterator.Keys)-1 {
 			nodeParentIterator, err = t.seekNode(updateNodeOff)
 			if err != nil {
 				return err
 			}
 
 			for k, v := range nodeParentIterator.Children {
-				if v == nodePrevIterator.Self {
+				if v == nodeCurIterator.Self {
 					idx = k
 					break
 				}
@@ -457,8 +526,13 @@ func (leaf *Node) mayUpdateParentKeys(t *Tree, idx int) error {
 			nodeParentIterator.Keys[idx] = key
 
 			t.flushNodeToDisk(nodeParentIterator)
+
+			updateNodeOff = nodeParentIterator.Parent
+			nodeCurIterator = nodeParentIterator
 		}
 	}
+
+	return nil
 }
 
 func main() {
