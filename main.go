@@ -405,6 +405,7 @@ func (t *Tree) insertIntoParent(leaf *Node) error {
 	parentOff := leaf.Parent
 	leftOff := leaf.Self
 	rightOff := leaf.Next
+	key := leaf.Keys[len(leaf.Keys)-1]
 
 	// root?
 	if parentOff == INVALID_OFFSET {
@@ -422,9 +423,31 @@ func (t *Tree) insertIntoParent(leaf *Node) error {
 			return err
 		}
 	}
+
+	// not root
+	parent, err := t.seekNode(parentOff)
+	if err != nil {
+		return err
+	}
+
+	idx = getIndex(parent.Keys, key)
+
 	return nil
 }
 
+func getIndex(keys []int, key int) int {
+	for i, k := range keys {
+		if k == key {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// newRootNode flush new root to disk
+// flush left node
+// flush right node
 func (t *Tree) newRootNode(left, right *Node) error {
 	root, err := t.newNodeFromDisk()
 	if err != nil {
@@ -440,6 +463,14 @@ func (t *Tree) newRootNode(left, right *Node) error {
 	right.Parent = root.Self
 
 	t.rootOff = root.Self
+
+	if err := t.flushNodeToDisk(left); err != nil {
+		return err
+	}
+
+	if err := t.flushNodeToDisk(right); err != nil {
+		return err
+	}
 
 	return t.flushNodeToDisk(root)
 }
