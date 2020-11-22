@@ -40,7 +40,7 @@ type Node struct {
 	Prev     int64
 	Parent   int64
 	Children []int64 // record children's offset
-	Keys     []int
+	Keys     []int64
 	Values   []string
 }
 
@@ -57,7 +57,7 @@ func NewTree(filename string) (*Tree, error) {
 	// if err = syscall.Statfs(filename, &stat); err != nil {
 	// 	return nil, err
 	// }
-
+	t.rootOff = INVALID_OFFSET
 	t.blockSize = BLOCK_SIZE
 
 	fstat, err := t.file.Stat()
@@ -149,19 +149,19 @@ func (t *Tree) seekNode(off int64) (*Node, error) {
 	}
 
 	bs := bytes.NewBuffer(buf)
-	var dataLen int
+	var dataLen uint32
 	if err := binary.Read(bs, binary.LittleEndian, &dataLen); err != nil {
 		return nil, err
 	}
 
-	if dataLen+8 > int(t.blockSize) {
+	if dataLen+8 > t.blockSize {
 		return nil, fmt.Errorf("node length invalid: %v, the block size is %v", dataLen, t.blockSize)
 	}
 
 	buf = make([]byte, dataLen)
-	if n, err := t.file.ReadAt(buf, off+8); err != nil {
+	if n, err := t.file.ReadAt(buf, off+4); err != nil {
 		return nil, err
-	} else if n != dataLen {
+	} else if n != int(dataLen) {
 		return nil, fmt.Errorf("read at %v from %v, expect len = %v but got %v", off, t.file.Name(), 8, n)
 	}
 
@@ -198,12 +198,12 @@ func (t *Tree) seekNode(off int64) (*Node, error) {
 	}
 
 	// children
-	var childCnt int
+	var childCnt int64
 	if err := binary.Read(bs, binary.LittleEndian, &childCnt); err != nil {
 		return nil, err
 	}
 	node.Children = make([]int64, childCnt)
-	for i := 0; i < childCnt; i++ {
+	for i := int64(0); i < childCnt; i++ {
 		var child int64
 		if err := binary.Read(bs, binary.LittleEndian, &child); err != nil {
 			return nil, err
@@ -212,13 +212,13 @@ func (t *Tree) seekNode(off int64) (*Node, error) {
 	}
 
 	// keys
-	var keysCnt int
+	var keysCnt int64
 	if err := binary.Read(bs, binary.LittleEndian, &keysCnt); err != nil {
 		return nil, err
 	}
-	node.Keys = make([]int, keysCnt)
-	for i := 0; i < keysCnt; i++ {
-		var key int
+	node.Keys = make([]int64, keysCnt)
+	for i := int64(0); i < keysCnt; i++ {
+		var key int64
 		if err := binary.Read(bs, binary.LittleEndian, &key); err != nil {
 			return nil, err
 		}
@@ -226,13 +226,13 @@ func (t *Tree) seekNode(off int64) (*Node, error) {
 	}
 
 	// values
-	var valuesCnt int
+	var valuesCnt int64
 	if err := binary.Read(bs, binary.LittleEndian, &valuesCnt); err != nil {
 		return nil, err
 	}
 	node.Values = make([]string, valuesCnt)
-	for i := 0; i < valuesCnt; i++ {
-		var strLen int
+	for i := int64(0); i < valuesCnt; i++ {
+		var strLen uint32
 		if err := binary.Read(bs, binary.LittleEndian, &strLen); err != nil {
 			return nil, err
 		}
@@ -246,7 +246,7 @@ func (t *Tree) seekNode(off int64) (*Node, error) {
 	return node, nil
 }
 
-func (t *Tree) Insert(key int, val string) error {
+func (t *Tree) Insert(key int64, val string) error {
 	// if tree is empty, insert it as root
 	if t.rootOff == INVALID_OFFSET {
 		node, err := t.newNodeFromDisk()
@@ -328,7 +328,7 @@ func (t *Tree) flushNodeToDisk(n *Node) error {
 
 	// children
 	childCnt := len(n.Children)
-	if err := binary.Write(bs, binary.LittleEndian, childCnt); err != nil {
+	if err := binary.Write(bs, binary.LittleEndian, int64(childCnt)); err != nil {
 		return err
 	}
 
@@ -340,7 +340,7 @@ func (t *Tree) flushNodeToDisk(n *Node) error {
 
 	// keys
 	keysCnt := len(n.Keys)
-	if err := binary.Write(bs, binary.LittleEndian, keysCnt); err != nil {
+	if err := binary.Write(bs, binary.LittleEndian, int64(keysCnt)); err != nil {
 		return err
 	}
 
@@ -352,20 +352,42 @@ func (t *Tree) flushNodeToDisk(n *Node) error {
 
 	// values
 	valuesCnt := len(n.Values)
-	if err := binary.Write(bs, binary.LittleEndian, valuesCnt); err != nil {
+	if err := binary.Write(bs, binary.LittleEndian, int64(valuesCnt)); err != nil {
 		return err
 	}
 
 	for _, v := range n.Values {
-		if err := binary.Write(bs, binary.LittleEndian, v); err != nil {
+		if err := binary.Write(bs, binary.LittleEndian, uint32(len([]byte(v)))); err != nil {
 			return err
 		}
+		if err := binary.Write(bs, binary.LittleEndian, []byte(v)); err != nil {
+			return err
+		}
+	}
+
+	//
+
+	dataLen := len(bs.Bytes())
+	if uint32(dataLen)+8 > t.blockSize {
+		return fmt.Errorf("flushNode len(node) = %d exceed t.blockSize %d", uint64(dataLen)+4, t.blockSize)
+	}
+
+	tmpbs := bytes.NewBuffer(make([]byte, 0))
+	if err := binary.Write(tmpbs, binary.LittleEndian, uint32(dataLen)); err != nil {
+		return err
+	}
+
+	data := append(tmpbs.Bytes(), bs.Bytes()...)
+	if length, err := t.file.WriteAt(data, int64(n.Self)); err != nil {
+		return err
+	} else if len(data) != length {
+		return fmt.Errorf("writeat %d into %s, expected len = %d but get %d", int64(n.Self), t.file.Name(), len(data), length)
 	}
 
 	return nil
 }
 
-func (t *Tree) insertIntoLeaf(key int, val string) error {
+func (t *Tree) insertIntoLeaf(key int64, val string) error {
 	leaf, err := t.findLeafNode(key)
 	if err != nil {
 		return err
@@ -515,7 +537,7 @@ func (t *Tree) insertIntoParent(leaf *Node) error {
 	return t.insertIntoParent(parent)
 }
 
-func getIndex(keys []int, key int) int {
+func getIndex(keys []int64, key int64) int {
 	idx := sort.Search(len(keys), func(i int) bool {
 		return key <= keys[i]
 	})
@@ -602,7 +624,7 @@ func (t *Tree) splitLeafIntoTwoLeaves(leaf *Node, newLeaf *Node) error {
 	return nil
 }
 
-func (t *Tree) findLeafNode(key int) (*Node, error) {
+func (t *Tree) findLeafNode(key int64) (*Node, error) {
 	root, err := t.seekNode(t.rootOff)
 	if err != nil {
 		return nil, err
@@ -629,7 +651,7 @@ func (t *Tree) findLeafNode(key int) (*Node, error) {
 	return nodeIterator, nil
 }
 
-func (n *Node) insertKeyValIntoLeaf(key int, val string) (int, error) {
+func (n *Node) insertKeyValIntoLeaf(key int64, val string) (int, error) {
 	idx := sort.Search(len(n.Keys), func(i int) bool {
 		return key <= n.Keys[i]
 	})
@@ -689,7 +711,7 @@ func (leaf *Node) mayUpdateParentKeys(t *Tree, idx int) error {
 }
 
 // Find the key
-func (t *Tree) Find(key int) (string, error) {
+func (t *Tree) Find(key int64) (string, error) {
 	if t.rootOff == INVALID_OFFSET {
 		return "", ErrorNotFoundKey
 	}
