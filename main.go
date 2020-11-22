@@ -688,6 +688,65 @@ func (leaf *Node) mayUpdateParentKeys(t *Tree, idx int) error {
 	return nil
 }
 
+// Find the key
+func (t *Tree) Find(key int) (string, error) {
+	if t.rootOff == INVALID_OFFSET {
+		return "", ErrorNotFoundKey
+	}
+
+	node, err := t.findLeafNode(key)
+	if err != nil {
+		return "", err
+	}
+
+	for i, nkey := range node.Keys {
+		if nkey == key {
+			return node.Values[i], nil
+		}
+	}
+
+	return "", ErrorNotFoundKey
+}
+
+// PrintTree print the whole tree
+func (t *Tree) PrintTree() error {
+	if t.rootOff == INVALID_OFFSET {
+		return fmt.Errorf("tree empty")
+	}
+
+	// 广度优先搜索
+	Q := make([]int64, 0)
+	Q = append(Q, t.rootOff)
+
+	depth := 0
+	for len(Q) != 0 {
+		depth++
+
+		l := len(Q)
+		fmt.Printf("depth %v: ", depth)
+		for i := 0; i < l; i++ {
+			cur, err := t.seekNode(Q[i])
+			if err != nil {
+				return err
+			}
+
+			if i == l-1 {
+				fmt.Println(cur.Keys)
+			} else {
+				fmt.Printf("%v, ", cur.Keys)
+			}
+
+			for _, v := range cur.Children {
+				Q = append(Q, v)
+			}
+		}
+
+		Q = Q[1:]
+	}
+
+	return nil
+}
+
 func main() {
 	fmt.Println(NewTree("test.db"))
 }
