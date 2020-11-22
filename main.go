@@ -430,19 +430,97 @@ func (t *Tree) insertIntoParent(leaf *Node) error {
 		return err
 	}
 
-	idx = getIndex(parent.Keys, key)
+	// insert into parent's keys
+	idx := getIndex(parent.Keys, key)
+	parent.Keys = append(parent.Keys, 0)
 
-	return nil
-}
+	for i := len(parent.Keys) - 1; i > idx; i-- {
+		parent.Keys[i] = parent.Keys[i-1]
+	}
+	parent.Keys[idx] = key
 
-func getIndex(keys []int, key int) int {
-	for i, k := range keys {
-		if k == key {
-			return i
+	if idx == len(parent.Children) {
+		parent.Children = append(parent.Children, rightOff)
+		return nil
+	}
+
+	tmpChild := parent.Children[idx+1:]
+	parent.Children = append(append(parent.Children[:idx+1], rightOff), tmpChild...)
+
+	// if parent no need to split
+	if len(parent.Keys) <= order {
+		return t.flushNodeToDisk(parent)
+	}
+
+	// if parent need to split recursively
+	// new parent only half
+	newNode, err := t.newNodeFromDisk()
+	if err != nil {
+		return err
+	}
+
+	split := cut(order)
+
+	for i := split; i <= order; i++ {
+		newNode.Children = append(newNode.Children, parent.Children[i])
+		newNode.Keys = append(newNode.Keys, parent.Keys[i])
+
+		// update original's children's parent
+		child, err := t.seekNode(parent.Children[i])
+		if err != nil {
+			return err
+		}
+
+		child.Parent = newNode.Self
+
+		if err := t.flushNodeToDisk(child); err != nil {
+			return err
 		}
 	}
 
-	return -1
+	newNode.Parent = parent.Parent
+
+	// original parent keeps another half
+	parent.Children = parent.Children[:split]
+	parent.Keys = parent.Keys[:split]
+
+	newNode.Next = parent.Next
+	parent.Next = newNode.Self
+	newNode.Prev = parent.Self
+
+	// update original parent's next
+	if newNode.Next != INVALID_OFFSET {
+		oriNextNode, err := t.seekNode(newNode.Next)
+		if err != nil {
+			return err
+		}
+
+		oriNextNode.Prev = newNode.Self
+
+		if err := t.flushNodeToDisk(oriNextNode); err != nil {
+			return err
+		}
+	}
+
+	// flush ori parent & new parent
+	if err := t.flushNodeToDisk(parent); err != nil {
+		return err
+	}
+
+	if err := t.flushNodeToDisk(newNode); err != nil {
+		return err
+	}
+
+	// update parent&newnode 's parent recursively
+	return t.insertIntoParent(parent)
+}
+
+func getIndex(keys []int, key int) int {
+	idx := sort.Search(len(keys), func(i int) bool {
+		return key <= keys[i]
+	})
+
+	return idx
 }
 
 // newRootNode flush new root to disk
